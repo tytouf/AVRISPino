@@ -1,6 +1,6 @@
 #include <SPI.h>
 
-// November 2011, Christophe Augier
+// November 2011, Christophe Augier <christophe.augier@gmail.com
 //
 // AVR ISP programmer based on stk500 protocol
 //
@@ -10,11 +10,15 @@
 //
 
 #include "pins_arduino.h"
-#define RESET SS
 
+// Signal/Pin mapping
+
+#define RESET SS
 #define LED_HB 9
 #define LED_ERR 8
 #define LED_PMODE 7
+
+// Some macro definitions
 
 #define HW_VER    2
 #define SW_MAJOR  1
@@ -22,7 +26,8 @@
 
 #define BUFSIZE   128
 
-// Command definitions extracted from avrdude source code.
+// Command definitions as of AVR: STK500 Communication Protocol
+// (Copied from avrdude stk500.h file)
 //
 
 // *****************[ STK Message constants ]***************************
@@ -186,6 +191,7 @@ void clear_error()
 } 
 
 // this provides a heartbeat on pin 9, so you can tell the software is running.
+//
 uint8_t hbval = 128;
 int8_t hbdelta = 4;
 
@@ -207,7 +213,6 @@ uint8_t getch()
 
 // Commands implementation
 //
-
 boolean check_sync_crc_eop()
 {
   if (getch() != Sync_CRC_EOP) {
@@ -258,7 +263,7 @@ void reply_get_parameter()
       res = 50;
       break;
     case Parm_STK_BUFSIZEH:
-      res = BUFSIZE >> 8;
+      res = (BUFSIZE >> 8) & 0xFF;
       break;
     case Parm_STK_BUFSIZEL:
       res = BUFSIZE & 0xFF;
@@ -414,21 +419,10 @@ void reply_universal()
   Serial.print((char)ret);
   Serial.print((char)Resp_STK_OK);
 
-  // Detect a chip erase
+  // Detect a chip erase and wait for at least tWD_erase
   //
   if (b1 == 0xAC && (b2 & 0x80) == 0x80) {
     delay(10);
- #if 0
-    wait_for_rdy(); // FIXME: is this needed or even actually working?
-
-    digitalWrite(RESET, HIGH);
-    delay(1);
-    digitalWrite(RESET, LOW);
-
-    delay(30);
-
-    spi_transaction(0xAC, 0x53, 0x00, 0x00); // Enter pmode again
-#endif
   }
 }
 
@@ -437,12 +431,7 @@ void reply_chip_erase()
   if (!check_sync_crc_eop()) return;
 
   spi_transaction(0xAC, 0x80, 0x00, 0x00);
-
-  delay(2000);
-  wait_for_rdy(); // FIXME: is this needed or even actually working?
-  digitalWrite(RESET, HIGH);
-  delay(1);
-  digitalWrite(RESET, LOW);
+  delay(10);
 
   Serial.print((char)Resp_STK_INSYNC);
   Serial.print((char)Resp_STK_OK);
@@ -459,21 +448,20 @@ void reply_load_address()
 
   // FIXME: Added load extended address to 0x00, is it needed?
   //
-  spi_transaction(0x4D, 0x00, 0x00, 0x00);
+  //spi_transaction(0x4D, 0x00, 0x00, 0x00);
 
   Serial.print((char)Resp_STK_INSYNC);
   Serial.print((char)Resp_STK_OK);
 }
 
 
-// TODO: this should be parameterized with dev_params.pagesize. Here we suppose page size = 128
 uint16_t get_address_page(uint16_t addr)
 {
-  uint16_t mask = ~(127); // ~(dev_params.pagesizelow - 1);
-  return (addr & mask);
+  uint16_t mask = ~(dev_params.pagesizelow - 1);
+  return (addr & mask) >> 1;
 }
 
-uint8_t buf[BUFSIZE];
+static uint8_t buf[BUFSIZE];
 
 void wait_for_rdy()
 {
@@ -485,15 +473,13 @@ void wait_for_rdy()
 void write_flash(uint16_t addr, uint8_t length)
 {
   uint16_t page = get_address_page(addr);
+  uint8_t  i = 0;
 
-  for (uint8_t i = 0; i < length; i += 2) {
-    uint8_t addr_h = (addr >> 8) & 0xFF;
-    uint8_t addr_l = addr & 0xFF;
-
-    // Load low and high bytes at al
+  while (i < length) {
+    // Load low and high bytes at addr
     //
-    spi_transaction(0x40, addr_h, addr_l, 0xab); // buf[i]);
-    spi_transaction(0x48, addr_h, addr_l, 0xcd); // buf[i+1]);
+    spi_transaction(0x40, (addr >> 8) & 0xFF, addr & 0xFF, buf[i++]);
+    spi_transaction(0x48, (addr >> 8) & 0xFF, addr & 0xFF, buf[i++]);
    
     addr++;
 
@@ -503,14 +489,14 @@ void write_flash(uint16_t addr, uint8_t length)
     uint16_t cur_page = get_address_page(addr);
     if (page != cur_page) {
       spi_transaction(0x4C, (page >> 8) & 0xFF, page & 0xFF, 0x00);
-      delay(10);
+      delay(15);
       page = cur_page;
     }
   }
-  //spi_transaction(0x4C, page >> 8, page & 0xFF, 0x00);
-  //delay(10);
-
+  delay(15);
 }
+
+boolean first_time = true;
 
 void reply_prog_page()
 {
@@ -531,8 +517,16 @@ void reply_prog_page()
   uint8_t size_l = size & 0xFF;
 
   for (uint8_t i = 0; i < size_l; i++) {
-    buf[i] = getch();
+    buf[i] = 0;
   }
+
+  for (uint8_t i = 0; i < size_l; i++) {
+    uint8_t c = getch();
+    //buf[i] = (cur_addr & 0xFF)+ i;
+    if (first_time) buf[i] = c;
+  }
+
+  first_time = false;
 
   if (!check_sync_crc_eop()) return;
 
@@ -546,14 +540,16 @@ void reply_prog_page()
 
 void read_flash(uint16_t addr, uint8_t length)
 {
-  for (uint8_t i = 0; i < length; i += 2) {
+  uint8_t i = 0;
+
+  while (i < length) {
     uint8_t addr_h = (addr >> 8) & 0xFF;
     uint8_t addr_l = addr & 0xFF;
 
     // Read low and high bytes at addr
     //
-    buf[i]   = spi_transaction(0x20, addr_h, addr_l, 0x00);
-    buf[i+1] = spi_transaction(0x28, addr_h, addr_l, 0x00);
+    buf[i++]   = spi_transaction(0x20, addr_h, addr_l, 0x00);
+    buf[i++] = spi_transaction(0x28, addr_h, addr_l, 0x00);
 
     addr++;
   }
