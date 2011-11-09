@@ -8,6 +8,12 @@
 //  - AVR: In-System Programming
 //  - AVR: STK500 Communication protocol
 //
+// TODO:
+//  . in write_flash: make get_address_page and commit work
+//  . find why writing at 0x7000 also write at 0x3000 and writing at 0x0000 write at 0x4000
+//
+//
+//
 
 #include "pins_arduino.h"
 
@@ -385,6 +391,11 @@ void reply_enter_progmode()
       Serial.print((char)Resp_STK_NODEVICE);
       return;
     }
+
+    // Set load extended address to 0x00
+    //
+    spi_transaction(0x4D, 0x00, 0x00, 0x00);
+
     Serial.print((char)Resp_STK_OK);
   } else {
     Serial.print((char)Resp_STK_NODEVICE);
@@ -443,12 +454,9 @@ void reply_load_address()
 {
   cur_addr = getch();
   cur_addr |= ((uint16_t) getch()) << 8;
+  cur_addr *= 2; // multiply by two to get address for 8bits instead of 16bits words
   
   if (!check_sync_crc_eop()) return;
-
-  // FIXME: Added load extended address to 0x00, is it needed?
-  //
-  //spi_transaction(0x4D, 0x00, 0x00, 0x00);
 
   Serial.print((char)Resp_STK_INSYNC);
   Serial.print((char)Resp_STK_OK);
@@ -458,7 +466,7 @@ void reply_load_address()
 uint16_t get_address_page(uint16_t addr)
 {
   uint16_t mask = ~(dev_params.pagesizelow - 1);
-  return (addr & mask) >> 1;
+  return (addr & mask);
 }
 
 static uint8_t buf[BUFSIZE];
@@ -487,12 +495,15 @@ void write_flash(uint16_t addr, uint8_t length)
     // exec writing page.
     //
     uint16_t cur_page = get_address_page(addr);
+    #if 0
     if (page != cur_page) {
       spi_transaction(0x4C, (page >> 8) & 0xFF, page & 0xFF, 0x00);
       delay(15);
       page = cur_page;
     }
+    #endif
   }
+  spi_transaction(0x4C, (page >> 8) & 0xFF, page & 0xFF, 0x00);
   delay(15);
 }
 
@@ -517,23 +528,32 @@ void reply_prog_page()
   uint8_t size_l = size & 0xFF;
 
   for (uint8_t i = 0; i < size_l; i++) {
-    buf[i] = 0;
+    buf[i] = getch();
   }
-
-  for (uint8_t i = 0; i < size_l; i++) {
-    uint8_t c = getch();
-    //buf[i] = (cur_addr & 0xFF)+ i;
-    if (first_time) buf[i] = c;
-  }
-
-  first_time = false;
 
   if (!check_sync_crc_eop()) return;
 
+#if 1
   if (mem_type == 'F') {
     write_flash(cur_addr, size_l);
   }
+#else
+  if (first_time) {
+    for (uint8_t i = 0; i < size_l; i++) {
+      buf[i] = 0x99;
+    }
+    write_flash(0x00, 80);
 
+    for (uint8_t i = 0; i < size_l; i++) {
+      buf[i] = 0x11;
+    }
+    write_flash(0x40, 40);
+    
+    write_flash(0x80, 80);
+    
+    first_time = false;
+  }
+#endif
   Serial.print((char)Resp_STK_INSYNC);
   Serial.print((char)Resp_STK_OK);
 }
@@ -548,7 +568,7 @@ void read_flash(uint16_t addr, uint8_t length)
 
     // Read low and high bytes at addr
     //
-    buf[i++]   = spi_transaction(0x20, addr_h, addr_l, 0x00);
+    buf[i++] = spi_transaction(0x20, addr_h, addr_l, 0x00);
     buf[i++] = spi_transaction(0x28, addr_h, addr_l, 0x00);
 
     addr++;
