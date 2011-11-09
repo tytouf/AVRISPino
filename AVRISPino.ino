@@ -448,20 +448,20 @@ void reply_chip_erase()
   Serial.print((char)Resp_STK_OK);
 }
 
-uint16_t cur_addr;
-
-void reply_load_address()
+void wait_for_rdy()
 {
-  cur_addr = getch();
-  cur_addr |= ((uint16_t) getch()) << 8;
-  cur_addr *= 2; // multiply by two to get address for 8bits instead of 16bits words
-  
-  if (!check_sync_crc_eop()) return;
-
-  Serial.print((char)Resp_STK_INSYNC);
-  Serial.print((char)Resp_STK_OK);
+  while(spi_transaction(0xf0, 0x00, 0x00, 0x00) != 0); 
 }
 
+
+// Page addressing:   PCPAGE | PCWORD
+//
+// On Atmega32u4:
+//
+// 16K words (32k bytes), 128 words per page 
+// PCPAGE [13:7] | PCWORD [6:0]
+
+uint16_t cur_addr;
 
 uint16_t get_address_page(uint16_t addr)
 {
@@ -469,12 +469,25 @@ uint16_t get_address_page(uint16_t addr)
   return (addr & mask);
 }
 
-static uint8_t buf[BUFSIZE];
-
-void wait_for_rdy()
+uint8_t get_address_word(uint16_t addr)
 {
-  while(spi_transaction(0xf0, 0x00, 0x00, 0x00) != 0); 
+  uint16_t mask = dev_params.pagesizelow -1;
+  return addr & mask; 
 }
+
+void reply_load_address()
+{
+  cur_addr  =  (uint16_t) getch();
+  cur_addr |= ((uint16_t) getch()) << 8;
+  cur_addr *= 2; // multiply by two to get address in bytes instead of 16bits words
+  
+  if (!check_sync_crc_eop()) return;
+
+  Serial.print((char)Resp_STK_INSYNC);
+  Serial.print((char)Resp_STK_OK);
+}
+
+static uint8_t buf[BUFSIZE];
 
 // length need to be <= BUFSIZE
 //
@@ -484,24 +497,25 @@ void write_flash(uint16_t addr, uint8_t length)
   uint8_t  i = 0;
 
   while (i < length) {
+    uint8_t addr_l = get_address_word(addr);
     // Load low and high bytes at addr
     //
-    spi_transaction(0x40, (addr >> 8) & 0xFF, addr & 0xFF, buf[i++]);
-    spi_transaction(0x48, (addr >> 8) & 0xFF, addr & 0xFF, buf[i++]);
+    spi_transaction(0x40, 0x00, addr_l, buf[i++]);
+    spi_transaction(0x48, 0x00, addr_l, buf[i++]);
    
     addr++;
 
+#if 0
     // If we just loaded the last couple of bytes on the page,
     // exec writing page.
     //
     uint16_t cur_page = get_address_page(addr);
-    #if 0
     if (page != cur_page) {
       spi_transaction(0x4C, (page >> 8) & 0xFF, page & 0xFF, 0x00);
       delay(15);
       page = cur_page;
     }
-    #endif
+#endif
   }
   spi_transaction(0x4C, (page >> 8) & 0xFF, page & 0xFF, 0x00);
   delay(15);
