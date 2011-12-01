@@ -1,6 +1,6 @@
 #include <SPI.h>
 
-// November 2011, Christophe Augier <christophe.augier@gmail.com
+// November 2011, Christophe Augier <christophe.augier@gmail.com>
 //
 // AVR ISP programmer based on stk500 protocol
 //
@@ -11,7 +11,6 @@
 // TODO:
 //  . in write_flash: make get_address_page and commit work
 //  . find why writing at 0x7000 also write at 0x3000 and writing at 0x0000 write at 0x4000
-//
 //
 //
 
@@ -223,7 +222,7 @@ boolean check_sync_crc_eop()
 {
   if (getch() != Sync_CRC_EOP) {
     raise_error();
-    Serial.print((char)Resp_STK_NOSYNC);
+    Serial.write(Resp_STK_NOSYNC);
     return false;
   }
   return true;
@@ -233,17 +232,17 @@ void reply_get_sync()
 {
   if (!check_sync_crc_eop()) return;
 
-  Serial.print((char)Resp_STK_INSYNC);
-  Serial.print((char)Resp_STK_OK);
+  Serial.write(Resp_STK_INSYNC);
+  Serial.write(Resp_STK_OK);
 }
 
 void reply_sign_on()
 {
   if (!check_sync_crc_eop()) return;
 
-  Serial.print((char)Resp_STK_INSYNC);
+  Serial.write(Resp_STK_INSYNC);
   Serial.print(STK_SIGN_ON_MESSAGE);
-  Serial.print((char)Resp_STK_OK);
+  Serial.write(Resp_STK_OK);
 }
 
 void reply_get_parameter()
@@ -252,7 +251,7 @@ void reply_get_parameter()
 
   if (!check_sync_crc_eop()) return;
 
-  Serial.print((char)Resp_STK_INSYNC);
+  Serial.write(Resp_STK_INSYNC);
 
   uint8_t res = 0;
   switch(param) {
@@ -276,12 +275,12 @@ void reply_get_parameter()
       break;
 
     default:
-      Serial.print((char)param);
-      Serial.print((char)Resp_STK_FAILED);
+      Serial.write(param);
+      Serial.write(Resp_STK_FAILED);
       return;   
   }
-  Serial.print((char)res);
-  Serial.print((char)Resp_STK_OK);
+  Serial.write(res);
+  Serial.write(Resp_STK_OK);
 }
 
 struct {
@@ -343,8 +342,8 @@ void reply_set_device()
 
   device_is_set = true;
 
-  Serial.print((char)Resp_STK_INSYNC);
-  Serial.print((char)Resp_STK_OK);
+  Serial.write(Resp_STK_INSYNC);
+  Serial.write(Resp_STK_OK);
 }
 
 void reply_set_device_ext()
@@ -357,15 +356,15 @@ void reply_set_device_ext()
 
   if (!check_sync_crc_eop()) return;
 
-  Serial.print((char)Resp_STK_INSYNC);
-  Serial.print((char)Resp_STK_OK);
+  Serial.write(Resp_STK_INSYNC);
+  Serial.write(Resp_STK_OK);
 }
 
 void reply_enter_progmode()
 {
   if (!check_sync_crc_eop()) return;
 
-  Serial.print((char)Resp_STK_INSYNC);
+  Serial.write(Resp_STK_INSYNC);
 
   if (device_is_set) {
 
@@ -388,7 +387,7 @@ void reply_enter_progmode()
 
     if (ret != 0x53) {
       raise_error();
-      Serial.print((char)Resp_STK_NODEVICE);
+      Serial.write(Resp_STK_NODEVICE);
       return;
     }
 
@@ -396,9 +395,9 @@ void reply_enter_progmode()
     //
     spi_transaction(0x4D, 0x00, 0x00, 0x00);
 
-    Serial.print((char)Resp_STK_OK);
+    Serial.write(Resp_STK_OK);
   } else {
-    Serial.print((char)Resp_STK_NODEVICE);
+    Serial.write(Resp_STK_NODEVICE);
   }
 }
 
@@ -408,8 +407,8 @@ void reply_leave_progmode()
 
   leave_pmode();
 
-  Serial.print((char)Resp_STK_INSYNC);
-  Serial.print((char)Resp_STK_OK);
+  Serial.write(Resp_STK_INSYNC);
+  Serial.write(Resp_STK_OK);
 }
 
 void reply_universal()
@@ -426,9 +425,9 @@ void reply_universal()
     ret = spi_transaction(b1, b2, b3, b4);
   }
 
-  Serial.print((char)Resp_STK_INSYNC);
-  Serial.print((char)ret);
-  Serial.print((char)Resp_STK_OK);
+  Serial.write(Resp_STK_INSYNC);
+  Serial.write(ret);
+  Serial.write(Resp_STK_OK);
 
   // Detect a chip erase and wait for at least tWD_erase
   //
@@ -444,8 +443,8 @@ void reply_chip_erase()
   spi_transaction(0xAC, 0x80, 0x00, 0x00);
   delay(10);
 
-  Serial.print((char)Resp_STK_INSYNC);
-  Serial.print((char)Resp_STK_OK);
+  Serial.write(Resp_STK_INSYNC);
+  Serial.write(Resp_STK_OK);
 }
 
 void wait_for_rdy()
@@ -483,8 +482,8 @@ void reply_load_address()
   
   if (!check_sync_crc_eop()) return;
 
-  Serial.print((char)Resp_STK_INSYNC);
-  Serial.print((char)Resp_STK_OK);
+  Serial.write(Resp_STK_INSYNC);
+  Serial.write(Resp_STK_OK);
 }
 
 static uint8_t buf[BUFSIZE];
@@ -533,7 +532,7 @@ void reply_prog_page()
 
   if (size > BUFSIZE) {
     raise_error();
-    Serial.print((char)Resp_STK_NOSYNC);
+    Serial.write(Resp_STK_NOSYNC);
     return;
   }
 
@@ -568,8 +567,8 @@ void reply_prog_page()
     first_time = false;
   }
 #endif
-  Serial.print((char)Resp_STK_INSYNC);
-  Serial.print((char)Resp_STK_OK);
+  Serial.write(Resp_STK_INSYNC);
+  Serial.write(Resp_STK_OK);
 }
 
 void read_flash(uint16_t addr, uint8_t length)
@@ -600,13 +599,13 @@ void reply_read_page()
   // Note: again we don't care for more than BUFSIZE bytes buffers
   if (size > BUFSIZE) {
     raise_error();
-    Serial.print((char)Resp_STK_NOSYNC);
+    Serial.write(Resp_STK_NOSYNC);
     return;
   }
   
   if (!check_sync_crc_eop()) return;
 
-  Serial.print((char)Resp_STK_INSYNC);
+  Serial.write(Resp_STK_INSYNC);
 
   // BUFSIZE is < 256 so continue using uin8_t
   //
@@ -617,10 +616,10 @@ void reply_read_page()
   }
 
   for (uint8_t i = 0; i < size_l; i++) {
-    Serial.print((char)buf[i]);
+    Serial.write(buf[i]);
   }
 
-  Serial.print((char)Resp_STK_OK);
+  Serial.write(Resp_STK_OK);
 }
 
 void read_command()
@@ -668,7 +667,7 @@ void read_command()
 
     default:
       if (check_sync_crc_eop()) {
-        Serial.print((char)Resp_STK_UNKNOWN);
+        Serial.write(Resp_STK_UNKNOWN);
       }
       break;
   }
