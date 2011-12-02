@@ -8,11 +8,6 @@
 //  - AVR: In-System Programming
 //  - AVR: STK500 Communication protocol
 //
-// TODO:
-//  . in write_flash: make get_address_page and commit work
-//  . find why writing at 0x7000 also write at 0x3000 and writing at 0x0000 write at 0x4000
-//
-//
 
 #include "pins_arduino.h"
 
@@ -29,7 +24,7 @@
 #define SW_MAJOR  1
 #define SW_MINOR  18
 
-#define BUFSIZE   128
+#define BUFSIZE   256
 
 // Command definitions as of AVR: STK500 Communication Protocol
 // (Copied from avrdude stk500.h file)
@@ -296,10 +291,8 @@ struct {
   uint8_t flashpollval2;
   uint8_t eeprompollval1;
   uint8_t eeprompollval2;
-  uint8_t pagesizehigh;
-  uint8_t pagesizelow;
-  uint8_t eepromsizehigh;
-  uint8_t eepromsizelow;
+  uint16_t pagesize;
+  uint16_t eepromsize;
   uint8_t flashsize4;
   uint8_t flashsize3;
   uint8_t flashsize2;
@@ -329,10 +322,8 @@ void reply_set_device()
   dev_params.flashpollval2 = getch();
   dev_params.eeprompollval1 = getch();
   dev_params.eeprompollval2 = getch();
-  dev_params.pagesizehigh = getch();
-  dev_params.pagesizelow = getch();
-  dev_params.eepromsizehigh = getch();
-  dev_params.eepromsizelow = getch();
+  dev_params.pagesize = 256 * getch() + getch();
+  dev_params.eepromsize = 256 * getch() + getch();
   dev_params.flashsize4 = getch();
   dev_params.flashsize3 = getch();
   dev_params.flashsize2 = getch();
@@ -457,28 +448,27 @@ void wait_for_rdy()
 //
 // On Atmega32u4:
 //
-// 16K words (32k bytes), 128 words per page 
+// 16K words (32k bytes), 128 words per page and 256 pages
 // PCPAGE [13:7] | PCWORD [6:0]
 
 uint16_t cur_addr;
 
 uint16_t get_address_page(uint16_t addr)
 {
-  uint16_t mask = ~(dev_params.pagesizelow - 1);
+  uint16_t mask = dev_params.pagesize / 2;
+  mask = ~(mask - 1);
   return (addr & mask);
 }
 
-uint8_t get_address_word(uint16_t addr)
+uint16_t get_address_word(uint16_t addr)
 {
-  uint16_t mask = dev_params.pagesizelow -1;
-  return addr & mask; 
+  uint16_t mask = dev_params.pagesize / 2 -1;
+  return (addr & mask); 
 }
 
 void reply_load_address()
 {
-  cur_addr  =  (uint16_t) getch();
-  cur_addr |= ((uint16_t) getch()) << 8;
-  cur_addr *= 2; // multiply by two to get address in bytes instead of 16bits words
+  cur_addr  = getch() + 256 * getch();
   
   if (!check_sync_crc_eop()) return;
 
@@ -488,6 +478,12 @@ void reply_load_address()
 
 static uint8_t buf[BUFSIZE];
 
+void commit_write(uint16_t addr)
+{
+    spi_transaction(0x4C, (addr >> 8) & 0xFF, addr & 0xFF, 0x00);
+    delay(10);
+}
+
 // length need to be <= BUFSIZE
 //
 void write_flash(uint16_t addr, uint8_t length)
@@ -496,41 +492,37 @@ void write_flash(uint16_t addr, uint8_t length)
   uint8_t  i = 0;
 
   while (i < length) {
-    uint8_t addr_l = get_address_word(addr);
+    uint8_t addr_h = (addr >> 8) & 0xFF;
+    uint8_t addr_l = addr & 0xFF;
+
     // Load low and high bytes at addr
     //
-    spi_transaction(0x40, 0x00, addr_l, buf[i++]);
-    spi_transaction(0x48, 0x00, addr_l, buf[i++]);
+    spi_transaction(0x40, addr_h, addr_l, buf[i++]);
+    spi_transaction(0x48, addr_h, addr_l, buf[i++]);
    
     addr++;
 
-#if 0
     // If we just loaded the last couple of bytes on the page,
     // exec writing page.
     //
     uint16_t cur_page = get_address_page(addr);
     if (page != cur_page) {
-      spi_transaction(0x4C, (page >> 8) & 0xFF, page & 0xFF, 0x00);
-      delay(15);
+      commit_write(page);
       page = cur_page;
     }
-#endif
   }
-  spi_transaction(0x4C, (page >> 8) & 0xFF, page & 0xFF, 0x00);
-  delay(15);
+  commit_write(page);
 }
-
-boolean first_time = true;
 
 void reply_prog_page()
 {
-  uint16_t size = ((uint16_t)getch()) << 8 | getch();
+  uint16_t len = 256 * getch() + getch();
 
   // Read memory type: E for EEPROM, F for FLASH
   //
   uint8_t mem_type = getch();
 
-  if (size > BUFSIZE) {
+  if (len > BUFSIZE) {
     raise_error();
     Serial.write(Resp_STK_NOSYNC);
     return;
@@ -538,7 +530,7 @@ void reply_prog_page()
 
   // BUFSIZE is < 256 so continue using uin8_t
   //
-  uint8_t size_l = size & 0xFF;
+  uint8_t size_l = len & 0xFF;
 
   for (uint8_t i = 0; i < size_l; i++) {
     buf[i] = getch();
@@ -546,27 +538,14 @@ void reply_prog_page()
 
   if (!check_sync_crc_eop()) return;
 
-#if 1
   if (mem_type == 'F') {
     write_flash(cur_addr, size_l);
+  } else {
+    raise_error();
+    Serial.write(Resp_STK_NOSYNC);
+    return;
   }
-#else
-  if (first_time) {
-    for (uint8_t i = 0; i < size_l; i++) {
-      buf[i] = 0x99;
-    }
-    write_flash(0x00, 80);
 
-    for (uint8_t i = 0; i < size_l; i++) {
-      buf[i] = 0x11;
-    }
-    write_flash(0x40, 40);
-    
-    write_flash(0x80, 80);
-    
-    first_time = false;
-  }
-#endif
   Serial.write(Resp_STK_INSYNC);
   Serial.write(Resp_STK_OK);
 }
@@ -590,14 +569,14 @@ void read_flash(uint16_t addr, uint8_t length)
 
 void reply_read_page()
 {
-  uint16_t size = ((uint16_t)getch()) << 8 | getch();
+  uint16_t len = 256 * getch() + getch();
  
   // Read memory type: E for EEPROM, F for FLASH
   //
   uint8_t mem_type = getch();
 
   // Note: again we don't care for more than BUFSIZE bytes buffers
-  if (size > BUFSIZE) {
+  if (len > BUFSIZE) {
     raise_error();
     Serial.write(Resp_STK_NOSYNC);
     return;
@@ -609,10 +588,14 @@ void reply_read_page()
 
   // BUFSIZE is < 256 so continue using uin8_t
   //
-  uint8_t size_l = size & 0xFF;
+  uint8_t size_l = len & 0xFF;
 
   if (mem_type == 'F') {
     read_flash(cur_addr, size_l);
+  } else {
+    raise_error();
+    Serial.write(Resp_STK_NOSYNC);
+    return;
   }
 
   for (uint8_t i = 0; i < size_l; i++) {
@@ -672,7 +655,6 @@ void read_command()
       break;
   }
 }
-
 
 void setup() {
   Serial.begin(19200);
